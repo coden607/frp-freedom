@@ -137,6 +137,10 @@ class DeviceManager:
         download_devices = self._scan_download_mode_devices()
         devices.extend(download_devices)
         
+        # Scan MTP devices (for devices in file transfer mode)
+        mtp_devices = self._scan_mtp_devices()
+        devices.extend(mtp_devices)
+        
         # Update connected_devices BEFORE modem scan so matching works correctly
         self.connected_devices = devices
         
@@ -320,11 +324,197 @@ class DeviceManager:
         return new_devices
 
     def _scan_download_mode_devices(self) -> List[DeviceInfo]:
-        """Scan for devices in download mode (placeholder)"""
-        # This would implement detection for Samsung Download Mode,
-        # MediaTek Download Mode, Qualcomm EDL mode, etc.
-        # For now, return empty list
-        return []
+        """Scan for devices in download mode"""
+        devices = []
+        try:
+            # Method 1: Scan via lsusb for MediaTek devices
+            result = subprocess.run(
+                ["lsusb"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if '0e8d:2000' in line.lower() or 'mediatek' in line.lower():
+                        self.logger.info(f"Found MediaTek device via lsusb: {line}")
+                        # Extract bus and device numbers
+                        parts = line.split()
+                        if len(parts) >= 6:
+                            bus_device = parts[1]  # e.g., "002:078"
+                            device_info = DeviceInfo(
+                                serial=f"usb_{bus_device}",
+                                model="MediaTek Preloader",
+                                manufacturer="MediaTek",
+                                android_version="Unknown",
+                                sdk_version="Unknown",
+                                bootloader_version="Unknown",
+                                frp_status="Unknown",
+                                connection_type="download",
+                                chipset="mediatek",
+                                brand="MediaTek",
+                                bootloader_status="Unknown",
+                                root_status="Unknown",
+                                device=line,
+                                modem_port=f"usb_{bus_device}"
+                            )
+                            devices.append(device_info)
+            
+            # Method 2: Also try serial port scan as fallback
+            ports = list(serial.tools.list_ports.comports())
+            self.logger.debug(f"Scanning {len(ports)} serial ports for download mode devices")
+            for port in ports:
+                if port.vid is None or port.pid is None:
+                    continue
+                
+                # Handle both integer and string vid/pid
+                try:
+                    vid = int(port.vid) if isinstance(port.vid, str) else port.vid
+                    pid = int(port.pid) if isinstance(port.pid, str) else port.pid
+                    vid_hex = f"{vid:04x}" if vid else "????"
+                    pid_hex = f"{pid:04x}" if pid else "????"
+                except (ValueError, TypeError):
+                    continue
+                
+                self.logger.debug(f"Port {port.device}: VID={vid_hex} PID={pid_hex}")
+                
+                if vid == 0x0E8D:
+                    self.logger.info(f"Found MediaTek download mode device via serial: {port.device}")
+                    device_info = DeviceInfo(
+                        serial=port.device,
+                        model="MediaTek Preloader",
+                        manufacturer="MediaTek",
+                        android_version="Unknown",
+                        sdk_version="Unknown",
+                        bootloader_version="Unknown",
+                        frp_status="Unknown",
+                        connection_type="download",
+                        chipset="mediatek",
+                        brand="MediaTek",
+                        bootloader_status="Unknown",
+                        root_status="Unknown",
+                        device=port.description,
+                        modem_port=port.device
+                    )
+                    devices.append(device_info)
+                    
+        except Exception as e:
+            self.logger.error(f"Error scanning download mode devices: {e}")
+        
+        return devices
+    
+    def _scan_mtp_devices(self) -> List[DeviceInfo]:
+        """Scan for devices in MTP (file transfer) mode via lsusb"""
+        devices = []
+        try:
+            result = subprocess.run(
+                ["lsusb"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    # Common MTP device indicators
+                    if 'mtp' in line.lower() or 'media' in line.lower() or 'phone' in line.lower():
+                        # Skip known non-phone devices
+                        if 'webcam' in line.lower() or 'camera' in line.lower():
+                            continue
+                        
+                        self.logger.info(f"Found potential MTP device via lsusb: {line}")
+                        
+                        # Extract bus and device numbers
+                        parts = line.split()
+                        if len(parts) >= 6:
+                            bus_device = parts[1]  # e.g., "002:078"
+                            vendor_product = parts[5]  # e.g., "ID 1bbb:0168"
+                            
+                            # Extract vendor and product IDs
+                            if ':' in vendor_product:
+                                vid_pid = vendor_product.split(':')[1]
+                                vid = vendor_product.split(':')[1][:4] if len(vendor_product.split(':')[1]) >= 4 else "????"
+                                
+                                # Try to identify manufacturer from vendor ID
+                                manufacturer = self._get_manufacturer_from_vid(vid)
+                                
+                                # Extract device name from line
+                                device_name = ' '.join(parts[6:])
+                                
+                                device_info = DeviceInfo(
+                                    serial=f"mtp_{bus_device}_{vid_pid}",
+                                    model=device_name or "Unknown MTP Device",
+                                    manufacturer=manufacturer or "Unknown",
+                                    android_version="Unknown",
+                                    sdk_version="Unknown",
+                                    bootloader_version="Unknown",
+                                    frp_status="Unknown",
+                                    connection_type="mtp",
+                                    chipset="unknown",
+                                    brand=manufacturer or "Unknown",
+                                    bootloader_status="Unknown",
+                                    root_status="Unknown",
+                                    device=device_name,
+                                    modem_port=f"mtp_{bus_device}"
+                                )
+                                devices.append(device_info)
+        
+        except Exception as e:
+            self.logger.error(f"Error scanning MTP devices: {e}")
+        
+        return devices
+    
+    def _get_manufacturer_from_vid(self, vid: str) -> str:
+        """Get manufacturer name from vendor ID"""
+        # Common Android vendor IDs
+        vendor_map = {
+            '04e8': 'Samsung',
+            '0bb4': 'HTC',
+            '22b8': 'Motorola',
+            '18d1': 'Google',
+            '0fce': 'Sony',
+            '04ee': 'LG',
+            '0fca': 'BlackBerry',
+            '1bbb': 'TCL',
+            '0e8d': 'MediaTek',
+            '2a96': 'Xiaomi',
+            '2717': 'Xiaomi',
+            '0b05': 'Asus',
+            '0bda': 'Realtek',
+            '0cf3': 'Qualcomm',
+            '2207': 'Unisoc',
+        }
+        return vendor_map.get(vid.lower(), 'Unknown')
+    
+    def switch_mtp_to_fastboot(self, device: DeviceInfo) -> bool:
+        """Attempt to switch a device from MTP mode to fastboot mode"""
+        try:
+            # Try to use adb to reboot to bootloader
+            # First, try to detect if adb can see the device in MTP mode
+            result = subprocess.run(
+                ["adb", "devices"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode == 0 and device.serial in result.stdout:
+                # Device is accessible via adb, try reboot to bootloader
+                self.logger.info(f"Device {device.serial} accessible via adb, attempting reboot to bootloader")
+                reboot_result = subprocess.run(
+                    ["adb", "-s", device.serial, "reboot", "bootloader"],
+                    capture_output=True, text=True, timeout=30
+                )
+                
+                if reboot_result.returncode == 0:
+                    self.logger.info(f"Successfully sent reboot to bootloader command to {device.serial}")
+                    return True
+                else:
+                    self.logger.warning(f"Failed to reboot to bootloader: {reboot_result.stderr}")
+                    return False
+            else:
+                # Device not accessible via adb in MTP mode
+                self.logger.warning(f"Device {device.serial} not accessible via adb in MTP mode")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error switching MTP to fastboot: {e}")
+            return False
     
     def _get_adb_device_info(self, serial: str, metadata: Dict[str, str] = None) -> Optional[DeviceInfo]:
         """Get detailed information for an ADB device"""

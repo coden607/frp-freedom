@@ -15,6 +15,7 @@ from ..core.config import Config
 from ..core.logger import setup_logging, AuditLogger
 from ..core.device_manager import DeviceManager, DeviceInfo
 from ..bypass.bypass_manager import BypassManager, BypassResult
+from ..bypass.auto_bypass_manager import AutoBypassManager
 from ..ai import AINotificationSystem
 from .device_selection import DeviceSelectionFrame
 from .method_selection import MethodSelectionFrame
@@ -33,6 +34,7 @@ class FRPFreedomApp:
         # Initialize managers
         self.device_manager = DeviceManager(self.config)
         self.bypass_manager = BypassManager(self.config, self.device_manager)
+        self.auto_bypass_manager = AutoBypassManager(self.config, self.device_manager, self.bypass_manager)
         
         # Initialize AI notification system (will be set after window creation)
         self.notification_system = None
@@ -201,6 +203,8 @@ class FRPFreedomApp:
         # Tools menu
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=tools_menu)
+        tools_menu.add_command(label="🚀 Auto Bypass", command=self.start_auto_bypass)
+        tools_menu.add_separator()
         tools_menu.add_command(label="Device Information", command=self.show_device_info)
         tools_menu.add_command(label="Refresh Devices", command=self.refresh_devices)
         tools_menu.add_command(label="Settings", command=self.show_settings)
@@ -673,18 +677,77 @@ Use this software responsibly and in compliance with applicable laws.
     
     def show_about(self):
         """Show about dialog"""
-        about_text = f"""
-FRP Freedom v{self.config.get('app.version')}
+        about_text = """FRP Freedom v1.0.0
+        
+A professional Android FRP bypass tool for legitimate device recovery.
 
-Professional FRP Bypass Tool
-For Legitimate Device Recovery Only
-
-Developed for educational and legitimate recovery purposes.
-Use responsibly and in compliance with local laws.
-
-© 2024 FRP Freedom Project
-"""
+        2024 FRP Freedom Project
+For legitimate device recovery purposes only."""
+        
         messagebox.showinfo("About FRP Freedom", about_text)
+    
+    def start_auto_bypass(self):
+        """Start automatic bypass process"""
+        if not self.config.get('auto_bypass.enabled', False):
+            messagebox.showwarning("Auto Bypass Disabled", "Auto bypass is disabled in settings. Enable it in config.yaml to use this feature.")
+            return
+        
+        # Show confirmation dialog
+        if not messagebox.askyesno(
+            "Auto Bypass",
+            "This will automatically:\n"
+            "1. Detect connected devices\n"
+            "2. Switch to optimal mode if needed\n"
+            "3. Select and execute best bypass method\n\n"
+            "Proceed with automatic bypass?"
+        ):
+            return
+        
+        # Create progress dialog
+        progress = ProgressDialog(
+            self.root,
+            "Auto Bypass",
+            "Starting automatic bypass process..."
+        )
+        
+        def progress_callback(message: str, percentage: int):
+            """Update progress dialog"""
+            self.root.after(0, lambda: progress.update_progress(message, percentage))
+        
+        def run_auto_bypass():
+            try:
+                # Run auto bypass
+                result = self.auto_bypass_manager.start_auto_bypass(progress_callback)
+                
+                # Close progress dialog
+                self.root.after(0, progress.close)
+                
+                # Show result
+                self.root.after(0, lambda: self.show_auto_bypass_result(result))
+                
+            except Exception as e:
+                self.root.after(0, progress.close)
+                self.root.after(0, lambda: messagebox.showerror("Auto Bypass Error", f"Error: {str(e)}"))
+        
+        # Run in background thread
+        thread = threading.Thread(target=run_auto_bypass, daemon=True)
+        thread.start()
+    
+    def show_auto_bypass_result(self, result: Dict[str, Any]):
+        """Show auto bypass result"""
+        if result['result'] == BypassResult.SUCCESS:
+            messagebox.showinfo(
+                "Auto Bypass Complete",
+                f"Success!\n\n{result['message']}\n\n"
+                "You can now access your device."
+            )
+        else:
+            messagebox.showwarning(
+                "Auto Bypass Failed",
+                f"Auto bypass was not successful.\n\n"
+                f"Reason: {result['message']}\n\n"
+                "Please try manual bypass or check device connection."
+            )
     
     def export_logs(self):
         """Export application logs"""

@@ -214,7 +214,7 @@ class BypassManager:
                     success_rate=0.89,
                     estimated_time=40,
                     requirements=["MediaTek chipset", "SP Flash Tool", "Custom firmware"],
-                    supported_devices=["Xiaomi", "Realme", "Oppo"],
+                    supported_devices=["MediaTek", "Xiaomi", "Realme", "Oppo"],
                     android_versions=["13.0", "14.0", "15.0"]
                 ),
                 BypassMethod(
@@ -284,27 +284,32 @@ class BypassManager:
                 return False
         
         # Check manufacturer (skip for unknown devices)
-        if device.manufacturer != "Unknown" and device.manufacturer.lower() not in [d.lower() for d in method.supported_devices]:
+        if device.manufacturer.lower() != "unknown" and device.manufacturer.lower() not in [d.lower() for d in method.supported_devices]:
+            self.logger.debug(f"Method {method.name} filtered: manufacturer {device.manufacturer} not in {method.supported_devices}")
             return False
         
-        # Check Android version (skip for unknown versions OR restricted devices)
-        # For restricted devices, we can't determine Android version, so allow all methods
-        if device.android_version != "Unknown" and device.connection_type not in ['adb_restricted', 'adb_unauthorized']:
+        # Check Android version (skip for unknown versions OR restricted devices OR download mode OR fastboot mode)
+        # For restricted/download/fastboot mode devices, we can't determine Android version, so allow all methods
+        if device.android_version != "Unknown" and device.connection_type not in ['adb_restricted', 'adb_unauthorized', 'download', 'fastboot']:
             device_version = device.android_version
             if device_version not in method.android_versions:
                 # Try to match major version
                 device_major = device_version.split('.')[0] if '.' in device_version else device_version
                 method_majors = [v.split('.')[0] for v in method.android_versions]
                 if device_major not in method_majors:
+                    self.logger.debug(f"Method {method.name} filtered: Android version {device_version} not in {method.android_versions}")
                     return False
         
         # Check connection type requirements for normal devices
         if device.connection_type not in ['adb_unauthorized', 'adb_restricted']:
             if method.category == 'adb' and device.connection_type not in ['adb']:
+                self.logger.debug(f"Method {method.name} filtered: ADB method but device is {device.connection_type}")
                 return False
             elif method.category == 'hardware' and device.connection_type not in ['fastboot', 'download']:
+                self.logger.debug(f"Method {method.name} filtered: Hardware method but device is {device.connection_type}")
                 return False
         
+        self.logger.debug(f"Method {method.name} PASSED compatibility check")
         return True
     
     def _risk_score(self, risk_level: str) -> int:
@@ -409,16 +414,21 @@ class BypassManager:
     
     def _verify_device_requirements(self, device: DeviceInfo, method: BypassMethod) -> bool:
         """Verify device meets method requirements"""
+        # Requirements that can be programmatically verified
+        verifiable_requirements = {
+            "USB connection": lambda d: d.connection_type in ['adb', 'fastboot', 'download'],
+            "ADB access": lambda d: d.connection_type == 'adb',
+            "Root access": lambda d: False  # Can't verify root in Fastboot mode
+        }
+        
         for requirement in method.requirements:
-            if requirement == "USB connection" and device.connection_type not in ['adb', 'fastboot']:
-                return False
-            elif requirement == "ADB access" and device.connection_type != 'adb':
-                return False
-            elif requirement == "Root access":
-                # Check if device has root access
-                success, output = self.device_manager.execute_adb_command(device.serial, ['shell', 'su', '-c', 'id'])
-                if not success or 'uid=0' not in output:
+            if requirement in verifiable_requirements:
+                if not verifiable_requirements[requirement](device):
+                    self.logger.warning(f"Requirement '{requirement}' not met for device {device.serial}")
                     return False
+            # Skip requirements that can't be programmatically verified
+            # (e.g., "Physical access", "Setup wizard active", "Emergency call available")
+            # These are assumed to be met by the user
         
         return True
     

@@ -44,6 +44,22 @@ bypass:
       timeout: 1200  # seconds
       requires_special_tools: true
   
+  # Enable specific method types
+  bypass_methods:
+    adb_exploits: true
+    bootloader_exploits: true
+    hardware_methods: true
+  
+# Auto bypass settings
+auto_bypass:
+  enabled: true
+  auto_detect: true
+  auto_switch_mode: true
+  auto_execute: true
+  max_alternative_methods: 3
+  mode_switch_timeout: 10  # seconds
+  scan_interval: 5  # seconds
+  
   # Execution settings
   max_concurrent_methods: 1
   retry_failed_methods: true
