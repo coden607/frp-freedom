@@ -1,7 +1,8 @@
 # FRP Freedom - Python Desktop Application Dependencies
+# Installing this file provides the runtime and test dependencies
+# needed to run `python -m pytest` in a clean environment.
 
 # Core dependencies
-tkinter-tooltip>=1.1.0
 pillow>=10.0.0
 psutil>=5.9.0
 pyserial>=3.5
