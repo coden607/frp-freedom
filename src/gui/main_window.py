@@ -614,34 +614,70 @@ Proceed only if you understand the risks and legal implications.
     
     def refresh_devices(self):
         """Refresh device list"""
-        try:
-            self.device_manager.refresh_devices()
-            if hasattr(self, 'device_frame'):
-                self.device_frame.refresh()
-            messagebox.showinfo("Refresh Complete", "Device list refreshed successfully.")
-        except Exception as e:
-            messagebox.showerror("Refresh Error", f"Failed to refresh devices: {e}")
-    
+        def run_refresh():
+            try:
+                devices = self.device_manager.scan_devices()
+                self.root.after(0, self._complete_device_refresh, devices)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Refresh Error", f"Failed to refresh devices: {e}"))
+
+        threading.Thread(target=run_refresh, daemon=True).start()
+
+    def _complete_device_refresh(self, devices):
+        """Apply refreshed device data to the current UI state."""
+        if hasattr(self, 'device_frame') and self.device_frame:
+            try:
+                if self.device_frame.winfo_exists():
+                    self.device_frame.update_device_list(devices)
+            except (tk.TclError, AttributeError):
+                pass
+
+        if self.selected_device:
+            refreshed_device = next(
+                (device for device in devices if device.serial == self.selected_device.serial),
+                None
+            )
+            if refreshed_device:
+                self.selected_device = refreshed_device
+
+        messagebox.showinfo("Refresh Complete", "Device list refreshed successfully.")
+
+    @staticmethod
+    def _format_device_value(value: Any) -> str:
+        """Render device fields consistently for the info dialog."""
+        if value is None:
+            return "Unknown"
+
+        if isinstance(value, str):
+            value = value.strip()
+            return value or "Unknown"
+
+        return str(value)
+
+    @classmethod
+    def format_device_info_text(cls, device: DeviceInfo) -> str:
+        """Format device details using the current DeviceInfo schema."""
+        return f"""
+Device Information:
+
+Model: {cls._format_device_value(device.model)}
+Manufacturer: {cls._format_device_value(device.manufacturer)}
+Serial Number: {cls._format_device_value(device.serial)}
+Android Version: {cls._format_device_value(device.android_version)}
+API Level: {cls._format_device_value(getattr(device, 'api_level', None))}
+Security Patch: {cls._format_device_value(getattr(device, 'security_patch', None))}
+Build ID: {cls._format_device_value(getattr(device, 'build_id', None))}
+Connection Type: {cls._format_device_value(device.connection_type)}
+FRP Status: {cls._format_device_value(getattr(device, 'frp_status', None))}
+""".strip()
+
     def show_device_info(self):
         """Show detailed device information"""
         if not self.selected_device:
             messagebox.showwarning("No Device", "Please select a device first.")
             return
-        
-        info_text = f"""
-Device Information:
 
-Model: {self.selected_device.model}
-Manufacturer: {self.selected_device.manufacturer}
-Serial Number: {self.selected_device.serial}
-Android Version: {self.selected_device.android_version}
-API Level: {self.selected_device.api_level}
-Security Patch: {getattr(self.selected_device, 'security_patch', 'Unknown')}
-Build Number: {getattr(self.selected_device, 'build_number', 'Unknown')}
-Connection Type: {self.selected_device.connection_type}
-Status: {self.selected_device.status}
-"""
-        
+        info_text = self.format_device_info_text(self.selected_device)
         messagebox.showinfo("Device Information", info_text)
     
     def show_settings(self):
