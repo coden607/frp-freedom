@@ -619,7 +619,7 @@ Proceed only if you understand the risks and legal implications.
                 devices = self.device_manager.scan_devices()
                 self.root.after(0, self._complete_device_refresh, devices)
             except Exception as e:
-                self.root.after(0, lambda: messagebox.showerror("Refresh Error", f"Failed to refresh devices: {e}"))
+                self.root.after(0, lambda err=e: messagebox.showerror("Refresh Error", f"Failed to refresh devices: {err}"))
 
         threading.Thread(target=run_refresh, daemon=True).start()
 
