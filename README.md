@@ -98,7 +98,13 @@
    pip install -r requirements.txt
    ```
 
-4. **Run the Application**
+4. **Run the Test Suite**
+   ```bash
+   python -m compileall -q .
+   python -m pytest
+   ```
+
+5. **Run the Application**
    ```bash
    python main.py
    ```
@@ -260,12 +266,12 @@ frp-freedom/
 2. **Install Development Dependencies**
    ```bash
    pip install -r requirements.txt
-   pip install pytest black flake8  # Development tools
    ```
 
 3. **Run Tests**
    ```bash
-   pytest tests/
+   python -m compileall -q .
+   python -m pytest
    ```
 
 4. **Code Formatting**
