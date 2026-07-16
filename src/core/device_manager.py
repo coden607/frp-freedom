@@ -401,12 +401,14 @@ class DeviceManager:
                     target_device = None
 
                     # Try to get serial from port
-                    port_serial = getattr(port, "serial_number", "")
+                    port_serial = getattr(port, "serial_number", "") or ""
+                    stable_serial = port_serial.strip()
+                    device_serial = stable_serial or port.device
 
                     # Check against existing devices
                     for device in self.connected_devices:
                         # Check strict serial match if available
-                        if port_serial and device.serial == port_serial:
+                        if stable_serial and device.serial == stable_serial:
                             self.logger.info(
                                 f"Matched modem {port.device} to existing device {device.serial}"
                             )
@@ -436,25 +438,33 @@ class DeviceManager:
                         # Don't try to read info here as it can block the port
                         continue
 
-                    # If no match found, create a new device entry
-                    # Don't read info during scan to avoid port blocking
-                    device_info = DeviceInfo(
-                        serial=port.device,  # Use port as serial for modem devices
-                        model="Samsung Modem",
-                        manufacturer="Samsung",
-                        android_version="Unknown",
-                        sdk_version="Unknown",
-                        bootloader_version="Unknown",
-                        frp_status="Unknown",
-                        connection_type="modem",
-                        chipset="Unknown",
-                        brand="Samsung",
-                        bootloader_status="Unknown",
-                        root_status="Unknown",
-                        device=port.description,
-                        modem_port=port.device,
-                    )
-                    new_devices.append(device_info)
+                    for existing_device in new_devices:
+                        if existing_device.serial == device_serial:
+                            self.logger.debug(
+                                f"Collapsed duplicate modem entry for {device_serial}"
+                            )
+                            existing_device.modem_port = port.device
+                            break
+                    else:
+                        # If no match found, create a new device entry
+                        # Don't read info during scan to avoid port blocking
+                        device_info = DeviceInfo(
+                            serial=device_serial,
+                            model="Samsung Modem",
+                            manufacturer="Samsung",
+                            android_version="Unknown",
+                            sdk_version="Unknown",
+                            bootloader_version="Unknown",
+                            frp_status="Unknown",
+                            connection_type="modem",
+                            chipset="Unknown",
+                            brand="Samsung",
+                            bootloader_status="Unknown",
+                            root_status="Unknown",
+                            device=port.description,
+                            modem_port=port.device,
+                        )
+                        new_devices.append(device_info)
         except Exception as e:
             self.logger.error(f"Error scanning samsung modems: {e}")
 
