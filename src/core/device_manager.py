@@ -11,6 +11,7 @@ import sys
 import os
 import shutil
 import time
+import threading
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass
@@ -73,14 +74,20 @@ class DeviceManager:
         self.adb_path = self._find_adb_binary()
         self.fastboot_path = self._find_fastboot_binary()
         self.connected_devices: List[DeviceInfo] = []
+        self._scan_lock = threading.RLock()
         self._scan_paused = False
         self._last_scan_time = 0.0
         self._pause_check_interval = 3.0
+        self._paused_device_serial = ""
 
     def _find_adb_binary(self) -> Optional[Path]:
         """Find ADB binary in system PATH or bundled tools"""
         # Check bundled tools first
         bundled_adb = Path(__file__).parent.parent.parent / "tools" / "adb"
+        if sys.platform == "win32":
+            bundled_adb_exe = bundled_adb.with_suffix(".exe")
+            if bundled_adb_exe.exists():
+                return bundled_adb_exe
         if bundled_adb.exists():
             return bundled_adb
 
@@ -127,6 +134,10 @@ class DeviceManager:
         bundled_fastboot = (
             Path(__file__).parent.parent.parent / "tools" / "fastboot"
         )
+        if sys.platform == "win32":
+            bundled_fastboot_exe = bundled_fastboot.with_suffix(".exe")
+            if bundled_fastboot_exe.exists():
+                return bundled_fastboot_exe
         if bundled_fastboot.exists():
             return bundled_fastboot
 
@@ -169,58 +180,83 @@ class DeviceManager:
 
     def scan_devices(self) -> List[DeviceInfo]:
         """Scan for connected Android devices while pausing after a device is found."""
-        now = time.monotonic()
+        if not self._scan_lock.acquire(blocking=False):
+            return list(self.connected_devices)
 
-        if self._scan_paused:
-            if now - self._last_scan_time < self._pause_check_interval:
-                self.logger.debug(
-                    "Scan paused while a device connection is active; waiting before checking again"
+        try:
+            now = time.monotonic()
+
+            if self._scan_paused:
+                if now - self._last_scan_time < self._pause_check_interval:
+                    self.logger.debug(
+                        "Scan paused while a device connection is active; waiting before checking again"
+                    )
+                    return list(self.connected_devices)
+
+                if self._paused_device_serial and self._is_device_connected(
+                    self._paused_device_serial
+                ):
+                    self.logger.debug(
+                        f"Selected device {self._paused_device_serial} is still connected"
+                    )
+                    return list(self.connected_devices)
+
+                self.logger.info(
+                    "Previously selected device disappeared; resuming full discovery"
                 )
-                return list(self.connected_devices)
+                self._scan_paused = False
+                self._paused_device_serial = ""
+            else:
+                self.logger.info("Scanning for connected devices...")
 
-            self.logger.info(
-                "Checking whether the previously detected device is still connected"
-            )
-        else:
-            self.logger.info("Scanning for connected devices...")
+            devices = []
 
-        devices = []
+            # Scan ADB devices
+            adb_devices = self._scan_adb_devices()
+            devices.extend(adb_devices)
 
-        # Scan ADB devices
-        adb_devices = self._scan_adb_devices()
-        devices.extend(adb_devices)
+            # Scan fastboot devices
+            fastboot_devices = self._scan_fastboot_devices()
+            devices.extend(fastboot_devices)
 
-        # Scan fastboot devices
-        fastboot_devices = self._scan_fastboot_devices()
-        devices.extend(fastboot_devices)
+            # Scan download mode devices (placeholder for future implementation)
+            download_devices = self._scan_download_mode_devices()
+            devices.extend(download_devices)
 
-        # Scan download mode devices (placeholder for future implementation)
-        download_devices = self._scan_download_mode_devices()
-        devices.extend(download_devices)
+            # Update connected_devices BEFORE modem scan so matching works correctly
+            self.connected_devices = devices
 
-        # Update connected_devices BEFORE modem scan so matching works correctly
-        self.connected_devices = devices
+            # Scan Samsung modems (merged into existing devices if matched)
+            modem_devices = self.scan_samsung_modems()
+            devices.extend(modem_devices)
 
-        # Scan Samsung modems (merged into existing devices if matched)
-        modem_devices = self.scan_samsung_modems()
-        devices.extend(modem_devices)
+            # Final update with any new modem-only devices
+            self.connected_devices = devices
+            self._last_scan_time = now
 
-        # Final update with any new modem-only devices
-        self.connected_devices = devices
-        self._last_scan_time = now
+            if devices:
+                self._paused_device_serial = next(
+                    (
+                        device.serial
+                        for device in devices
+                        if getattr(device, "serial", "")
+                    ),
+                    "",
+                )
+                self.logger.info(
+                    "Device connection detected; pausing further scans until it disconnects"
+                )
+                self._scan_paused = True
+            else:
+                self._paused_device_serial = ""
+                self.logger.info("No connected device found; resuming discovery")
+                self._scan_paused = False
 
-        if devices:
-            self.logger.info(
-                "Device connection detected; pausing further scans until it disconnects"
-            )
-            self._scan_paused = True
-        else:
-            self.logger.info("No connected device found; resuming discovery")
-            self._scan_paused = False
+            self.logger.info(f"Found {len(devices)} connected device(s)")
 
-        self.logger.info(f"Found {len(devices)} connected device(s)")
-
-        return devices
+            return devices
+        finally:
+            self._scan_lock.release()
 
     def _scan_adb_devices(self) -> List[DeviceInfo]:
         """Scan for ADB-connected devices"""
@@ -477,6 +513,26 @@ class DeviceManager:
         # For now, return empty list
         return []
 
+    def _is_device_connected(self, serial: str) -> bool:
+        """Perform a lightweight connection check for a known device serial."""
+        if not serial or not self.adb_path:
+            return False
+
+        try:
+            result = subprocess.run(
+                [str(self.adb_path), "-s", serial, "get-state"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0 and result.stdout.strip().lower() in {
+                "device",
+                "recovery",
+                "unauthorized",
+            }
+        except Exception:
+            return False
+
     def _get_adb_device_info(
         self, serial: str, metadata: Dict[str, str] = None
     ) -> Optional[DeviceInfo]:
@@ -497,22 +553,57 @@ class DeviceManager:
                 frp_status = self._check_frp_status(serial)
                 self.logger.debug(f"FRP status for {serial}: {frp_status}")
 
-                manufacturer = props.get("ro.product.manufacturer", "unknown")
+                manufacturer = props.get(
+                    "ro.product.manufacturer",
+                    metadata.get("manufacturer", "unknown"),
+                )
+                brand = props.get(
+                    "ro.product.brand",
+                    metadata.get("brand", manufacturer),
+                )
                 device_info = DeviceInfo(
                     serial=serial,
-                    model=props.get("ro.product.model", "unknown"),
+                    model=props.get(
+                        "ro.product.model", metadata.get("model", "unknown")
+                    ),
                     manufacturer=manufacturer,
                     android_version=props.get(
-                        "ro.build.version.release", "unknown"
+                        "ro.build.version.release",
+                        metadata.get("android_version", "unknown"),
                     ),
-                    sdk_version=props.get("ro.build.version.sdk", "unknown"),
-                    bootloader_version=props.get("ro.bootloader", "unknown"),
+                    sdk_version=props.get(
+                        "ro.build.version.sdk",
+                        metadata.get("sdk_version", "unknown"),
+                    ),
+                    bootloader_version=props.get(
+                        "ro.bootloader",
+                        metadata.get("bootloader_version", "unknown"),
+                    ),
                     frp_status=frp_status,
                     connection_type="adb",
-                    chipset=props.get("ro.hardware", "unknown"),
-                    brand=manufacturer,
+                    chipset=props.get(
+                        "ro.hardware", metadata.get("chipset", "unknown")
+                    ),
+                    brand=brand,
                     bootloader_status="unknown",
                     root_status="unknown",
+                    security_patch=props.get(
+                        "ro.build.version.security_patch",
+                        metadata.get("security_patch", "unknown"),
+                    ),
+                    api_level=props.get(
+                        "ro.build.version.sdk",
+                        metadata.get("api_level", "unknown"),
+                    ),
+                    build_id=props.get(
+                        "ro.build.id", metadata.get("build_id", "unknown")
+                    ),
+                    product=props.get(
+                        "ro.product.name", metadata.get("product", "unknown")
+                    ),
+                    device=props.get(
+                        "ro.product.device", metadata.get("device", "unknown")
+                    ),
                 )
 
                 self.logger.debug(
@@ -606,8 +697,11 @@ class DeviceManager:
         try:
             # Extract model from metadata
             model = metadata.get("model", "unknown")
-            metadata.get("product", "unknown")
-            metadata.get("device", "unknown")
+            product = metadata.get("product", "unknown")
+            device = metadata.get("device", "unknown")
+            build_id = metadata.get("build_id", "unknown")
+            security_patch = metadata.get("security_patch", "unknown")
+            api_level = metadata.get("api_level", "unknown")
 
             # Infer manufacturer from model name
             manufacturer = "unknown"
@@ -675,6 +769,11 @@ class DeviceManager:
                 brand=brand,
                 bootloader_status="unknown",
                 root_status="unknown",
+                build_id=build_id,
+                security_patch=security_patch,
+                api_level=api_level,
+                product=product,
+                device=device,
             )
 
             self.logger.info(
@@ -761,9 +860,8 @@ class DeviceManager:
     def _check_frp_status(self, serial: str) -> str:
         """Check FRP status of device"""
         try:
-            # Try multiple methods to check FRP status
-
-            # Method 1: Check persistent properties
+            # Try multiple methods to check FRP status.
+            # These values are only proxy signals and are not authoritative FRP state.
             result = subprocess.run(
                 [
                     str(self.adb_path),
@@ -777,15 +875,9 @@ class DeviceManager:
                 text=True,
                 timeout=5,
             )
+            if result.returncode == 0:
+                _ = result.stdout.strip()
 
-            if result.returncode == 0 and result.stdout.strip():
-                frp_value = result.stdout.strip()
-                if frp_value in ["", "0", "none"]:
-                    return "disabled"
-                else:
-                    return "enabled"
-
-            # Method 2: Check accounts database
             result = subprocess.run(
                 [
                     str(self.adb_path),
@@ -798,15 +890,9 @@ class DeviceManager:
                 text=True,
                 timeout=5,
             )
-
             if result.returncode == 0:
-                count = result.stdout.strip()
-                if count and count.isdigit() and int(count) > 0:
-                    return "enabled"
-                else:
-                    return "disabled"
+                _ = result.stdout.strip()
 
-            # Method 3: Check setup wizard state
             result = subprocess.run(
                 [
                     str(self.adb_path),
@@ -819,13 +905,8 @@ class DeviceManager:
                 text=True,
                 timeout=5,
             )
-
             if result.returncode == 0:
-                setup_complete = result.stdout.strip()
-                if setup_complete == "0":
-                    return "frp_locked"
-                elif setup_complete == "1":
-                    return "setup_complete"
+                _ = result.stdout.strip()
 
         except Exception as e:
             self.logger.error(f"Error checking FRP status for {serial}: {e}")
@@ -850,13 +931,23 @@ class DeviceManager:
             )
 
             if result.returncode == 0:
-                # Parse the hex output to get IMEI
                 output = result.stdout
-                # This is a simplified parser - real implementation would be
-                # more robust
-                imei_match = re.search(r"([0-9]{15})", output)
-                if imei_match:
-                    return imei_match.group(1)
+                decoded = []
+                for fragment in re.findall(r"([0-9a-fA-F]{8})", output):
+                    try:
+                        value = int(fragment, 16)
+                    except ValueError:
+                        continue
+                    low = value & 0xFFFF
+                    high = (value >> 16) & 0xFFFF
+                    if 0x30 <= low <= 0x39:
+                        decoded.append(chr(low))
+                    if 0x30 <= high <= 0x39:
+                        decoded.append(chr(high))
+
+                imei = "".join(decoded)
+                if len(imei) == 15 and imei.isdigit():
+                    return imei
 
         except Exception:
             pass
@@ -912,23 +1003,45 @@ class DeviceManager:
 
     def refresh_device_info(self, serial: str) -> Optional[DeviceInfo]:
         """Refresh information for a specific device"""
-        device = self.get_device_by_serial(serial)
-        if not device:
-            return None
+        if not self._scan_lock.acquire(blocking=False):
+            return self.get_device_by_serial(serial)
 
-        if device.connection_type == "adb":
-            updated_device = self._get_adb_device_info(serial)
-        elif device.connection_type == "fastboot":
-            updated_device = self._get_fastboot_device_info(serial)
-        else:
+        try:
+            device = self.get_device_by_serial(serial)
+            if not device:
+                return None
+
+            if device.connection_type == "adb":
+                metadata = {
+                    "model": device.model,
+                    "manufacturer": device.manufacturer,
+                    "android_version": device.android_version,
+                    "sdk_version": device.sdk_version,
+                    "bootloader_version": device.bootloader_version,
+                    "brand": device.brand,
+                    "chipset": device.chipset,
+                    "security_patch": device.security_patch,
+                    "api_level": device.api_level,
+                    "build_id": device.build_id,
+                    "product": device.product,
+                    "device": device.device,
+                }
+                updated_device = self._get_adb_device_info(serial, metadata)
+            elif device.connection_type == "fastboot":
+                updated_device = self._get_fastboot_device_info(serial)
+            else:
+                return device
+
+            if updated_device:
+                if device.modem_port:
+                    updated_device.modem_port = device.modem_port
+                # Update the device in the list
+                for i, dev in enumerate(self.connected_devices):
+                    if dev.serial == serial:
+                        self.connected_devices[i] = updated_device
+                        break
+                return updated_device
+
             return device
-
-        if updated_device:
-            # Update the device in the list
-            for i, dev in enumerate(self.connected_devices):
-                if dev.serial == serial:
-                    self.connected_devices[i] = updated_device
-                    break
-            return updated_device
-
-        return device
+        finally:
+            self._scan_lock.release()
