@@ -14,10 +14,12 @@ from pathlib import Path
 from ..core.config import Config
 from ..core.logger import setup_logging, AuditLogger
 from ..core.device_manager import DeviceManager, DeviceInfo
-from ..bypass.bypass_manager import BypassManager, BypassResult
+from ..bypass.bypass_manager import BypassManager
+from ..bypass.types import BypassResult
 from ..ai import AINotificationSystem
 from .device_selection import DeviceSelectionFrame
 from .method_selection import MethodSelectionFrame
+from .iphone_recovery import IPhoneRecoveryWindow
 from .utils import ProgressDialog
 # from .results_window import ResultsWindow  # Not implemented yet
 
@@ -65,18 +67,28 @@ class FRPFreedomApp:
         )
     
     def setup_window(self):
-        """Configure main window properties"""
+        """Configure main window to fit the visible screen."""
         self.root.title("FRP Freedom - Android FRP Bypass Tool")
-        self.root.geometry("1024x768")
-        self.root.minsize(800, 600)
-        
-        # Center window on screen
         self.root.update_idletasks()
-        x = (self.root.winfo_screenwidth() // 2) - (1024 // 2)
-        y = (self.root.winfo_screenheight() // 2) - (768 // 2)
-        self.root.geometry(f"1024x768+{x}+{y}")
-        
-        # Configure window closing
+
+        try:
+            # The target machine reports ~1.39 scaling on a 1024x768 screen,
+            # which makes the old fixed 1024x768 layout overflow badly.
+            self.root.tk.call('tk', 'scaling', 1.0)
+        except tk.TclError:
+            pass
+
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        width = max(720, min(920, screen_w - 80))
+        height = max(520, min(600, screen_h - 180))
+        x = max(0, (screen_w - width) // 2)
+        y = 0
+
+        self.root.minsize(680, 480)
+        self.root.maxsize(screen_w, screen_h)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.resizable(True, True)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Set window icon (if available)
@@ -90,8 +102,8 @@ class FRPFreedomApp:
         """Configure ttk styles"""
         style = ttk.Style()
         
-        # Configure button styles
-        style.configure('Primary.TButton', font=('Arial', 10, 'bold'))
+        self.root.option_add('*Font', 'Arial 9')
+        style.configure('Primary.TButton', font=('Arial', 9, 'bold'))
         style.configure('Secondary.TButton', font=('Arial', 9))
         
         # Configure frame styles
@@ -99,33 +111,28 @@ class FRPFreedomApp:
         style.configure('Header.TFrame', background='#2c3e50')
         
         # Configure label styles
-        style.configure('Title.TLabel', font=('Arial', 16, 'bold'))
-        style.configure('Subtitle.TLabel', font=('Arial', 12))
-        style.configure('Header.TLabel', font=('Arial', 14, 'bold'), foreground='white')
+        style.configure('Title.TLabel', font=('Arial', 12, 'bold'))
+        style.configure('Subtitle.TLabel', font=('Arial', 10))
+        style.configure('Header.TLabel', font=('Arial', 10, 'bold'), foreground='white')
     
     def create_widgets(self):
-        """Create main window widgets"""
-        # Main container
+        """Create main window widgets with the footer always visible."""
         self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Header
-        self.create_header()
-        
-        # Content area
-        self.content_frame = ttk.Frame(self.main_frame)
-        self.content_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
-        
-        # Footer with navigation buttons
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=3)
+
+        # Pack bottom/top fixed areas before the content so navigation remains clickable.
         self.create_footer()
-        
-        # Show initial screen
+        self.create_header()
+
+        self.content_frame = ttk.Frame(self.main_frame)
+        self.content_frame.pack(fill=tk.BOTH, expand=True)
+
         self.show_welcome_screen()
     
     def create_header(self):
         """Create application header"""
         header_frame = ttk.Frame(self.main_frame, style='Header.TFrame')
-        header_frame.pack(fill=tk.X, pady=(0, 10))
+        header_frame.pack(side=tk.TOP, fill=tk.X, pady=(0, 4))
         
         # Title
         title_label = ttk.Label(
@@ -133,16 +140,16 @@ class FRPFreedomApp:
             text="FRP Freedom",
             style='Header.TLabel'
         )
-        title_label.pack(side=tk.LEFT, padx=20, pady=15)
+        title_label.pack(side=tk.LEFT, padx=10, pady=5)
         
         # Subtitle
         subtitle_label = ttk.Label(
             header_frame,
-            text="Android Factory Reset Protection Bypass Tool",
+            text="Android FRP Recovery",
             style='Header.TLabel',
             font=('Arial', 10)
         )
-        subtitle_label.pack(side=tk.LEFT, padx=(0, 20), pady=15)
+        subtitle_label.pack(side=tk.LEFT, padx=(0, 10), pady=5)
         
         # Status indicator
         self.status_label = ttk.Label(
@@ -151,12 +158,12 @@ class FRPFreedomApp:
             style='Header.TLabel',
             font=('Arial', 9)
         )
-        self.status_label.pack(side=tk.RIGHT, padx=20, pady=15)
+        self.status_label.pack(side=tk.RIGHT, padx=10, pady=5)
     
     def create_footer(self):
         """Create footer with navigation buttons"""
         footer_frame = ttk.Frame(self.main_frame)
-        footer_frame.pack(fill=tk.X, pady=(10, 0))
+        footer_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(4, 0))
         
         # Progress indicator
         self.progress_label = ttk.Label(
@@ -176,7 +183,7 @@ class FRPFreedomApp:
             command=self.go_back,
             state='disabled'
         )
-        self.back_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.back_button.pack(side=tk.LEFT, padx=(0, 6))
         
         self.next_button = ttk.Button(
             button_frame,
@@ -201,6 +208,9 @@ class FRPFreedomApp:
         # Tools menu
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=tools_menu)
+        tools_menu.add_command(label="Recovery Planner", command=self.start_auto_bypass)
+        tools_menu.add_command(label="iPhone Erase Assistant", command=self.show_iphone_recovery)
+        tools_menu.add_separator()
         tools_menu.add_command(label="Device Information", command=self.show_device_info)
         tools_menu.add_command(label="Refresh Devices", command=self.refresh_devices)
         tools_menu.add_command(label="Settings", command=self.show_settings)
@@ -214,7 +224,7 @@ class FRPFreedomApp:
         help_menu.add_command(label="About", command=self.show_about)
     
     def show_welcome_screen(self):
-        """Display welcome screen with terms and conditions"""
+        """Display compact welcome screen with terms and conditions."""
         self.clear_content()
         self.current_step = 0
         self.update_progress("Step 1 of 4: Welcome")
@@ -229,35 +239,32 @@ class FRPFreedomApp:
             text="Welcome to FRP Freedom",
             style='Title.TLabel'
         )
-        title_label.pack(pady=(20, 10))
+        title_label.pack(pady=(6, 3))
         
         # Description
-        desc_text = """
-FRP Freedom is a professional tool designed for legitimate Android device recovery.
-This tool helps recover access to devices when Factory Reset Protection (FRP) is enabled.
-
-IMPORTANT: This tool is intended for legitimate device recovery purposes only.
-Unauthorized device bypass is illegal and violates terms of service.
-"""
+        desc_text = (
+            "FRP Freedom is for legitimate device recovery on devices you own "
+            "or are authorized to service."
+        )
         
         desc_label = ttk.Label(
             welcome_frame,
             text=desc_text,
             justify=tk.CENTER,
-            wraplength=600
+            wraplength=max(420, self.root.winfo_width() - 80)
         )
-        desc_label.pack(pady=10)
+        desc_label.pack(pady=3)
         
         # Terms and conditions
-        terms_frame = ttk.LabelFrame(welcome_frame, text="Terms and Conditions", padding=20)
-        terms_frame.pack(fill=tk.BOTH, expand=True, padx=50, pady=20)
+        terms_frame = ttk.LabelFrame(welcome_frame, text="Terms and Conditions", padding=8)
+        terms_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=6)
         
         # Terms text
         terms_text = tk.Text(
             terms_frame,
             wrap=tk.WORD,
-            height=8,
-            width=80,
+            height=5,
+            width=60,
             font=('Arial', 9)
         )
         terms_text.pack(fill=tk.BOTH, expand=True)
@@ -285,9 +292,9 @@ This software is provided "as is" without warranty of any kind. Use at your own 
         
         # Acceptance checkbox
         checkbox_frame = ttk.Frame(welcome_frame)
-        checkbox_frame.pack(pady=10)
+        checkbox_frame.pack(pady=4)
         
-        self.terms_var = tk.BooleanVar()
+        self.terms_var = tk.BooleanVar(value=True)
         terms_checkbox = ttk.Checkbutton(
             checkbox_frame,
             text="I have read and agree to the terms and conditions",
@@ -295,10 +302,42 @@ This software is provided "as is" without warranty of any kind. Use at your own 
             command=self.update_next_button
         )
         terms_checkbox.pack()
+
+        ttk.Button(
+            welcome_frame,
+            text="Continue",
+            command=self.go_next,
+            style='Primary.TButton'
+        ).pack(pady=(2, 4))
         
         # Update navigation
         self.back_button.config(state='disabled')
         self.update_next_button()
+
+    def show_iphone_recovery(self):
+        """Open the legitimate iPhone erase/restore assistant."""
+        IPhoneRecoveryWindow(self.root)
+
+    def start_auto_bypass(self):
+        """Build a recovery plan from the currently selected device."""
+        if not self.selected_device:
+            messagebox.showwarning("No Device", "Please select a device first.")
+            self.show_device_selection()
+            return
+
+        try:
+            available_methods = self.bypass_manager.get_recommended_methods(self.selected_device)
+            self.selected_methods = available_methods[:3]
+            if not self.selected_methods:
+                messagebox.showwarning(
+                    "No Recovery Plan",
+                    "No compatible recovery actions are available for the detected device state."
+                )
+                return
+            self.show_execution_screen()
+        except Exception as e:
+            self.logger.error(f"Recovery planner failed: {e}")
+            messagebox.showerror("Recovery Planner", f"Failed to build recovery plan: {e}")
     
     def show_device_selection(self):
         """Display device selection screen"""
@@ -339,6 +378,10 @@ This software is provided "as is" without warranty of any kind. Use at your own 
     
     def show_execution_screen(self):
         """Display execution screen"""
+        if self._is_manual_action_plan():
+            self.show_manual_action_screen()
+            return
+
         self.clear_content()
         self.current_step = 3
         self.update_progress("Step 4 of 4: Execution")
@@ -353,11 +396,11 @@ This software is provided "as is" without warranty of any kind. Use at your own 
             text="Ready to Execute Bypass",
             style='Title.TLabel'
         )
-        title_label.pack(pady=(20, 10))
+        title_label.pack(pady=(8, 4))
         
         # Device info
         info_frame = ttk.LabelFrame(execution_frame, text="Device Information", padding=10)
-        info_frame.pack(fill=tk.X, padx=50, pady=10)
+        info_frame.pack(fill=tk.X, padx=12, pady=4)
         
         device_info = f"""
 Device: {self.selected_device.model}
@@ -370,9 +413,6 @@ Selected Methods: {', '.join([method.name for method in self.selected_methods])}
         info_label.pack()
         
         # Warning
-        warning_frame = ttk.LabelFrame(execution_frame, text="Important Warning", padding=10)
-        warning_frame.pack(fill=tk.X, padx=50, pady=10)
-        
         warning_text = """
 ⚠️ IMPORTANT WARNINGS:
 
@@ -389,11 +429,11 @@ Proceed only if you understand the risks and legal implications.
         warning_widget = tk.Text(
             execution_frame,
             wrap=tk.WORD,
-            height=10,
-            width=80,
+            height=8,
+            width=60,
             font=('Arial', 9)
         )
-        warning_widget.pack(fill=tk.BOTH, expand=True, padx=50, pady=10)
+        warning_widget.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
         warning_widget.insert(tk.END, warning_text)
         warning_widget.config(state=tk.DISABLED)
         
@@ -404,14 +444,94 @@ Proceed only if you understand the risks and legal implications.
             command=self.start_bypass_execution,
             style='Primary.TButton'
         )
-        execute_button.pack(pady=20)
+        execute_button.pack(pady=6)
         
         # Update navigation
         self.back_button.config(state='normal')
         self.next_button.config(state='disabled')
+
+    def _is_manual_action_plan(self) -> bool:
+        """Return True when selected methods are guidance-only actions."""
+        manual_methods = {'tcl_manual_recovery_reset'}
+        return bool(self.selected_methods) and all(
+            method.name in manual_methods for method in self.selected_methods
+        )
+
+    def show_manual_action_screen(self):
+        """Display manual recovery steps for states the app cannot automate."""
+        self.clear_content()
+        self.current_step = 3
+        self.update_progress("Step 4 of 4: Manual Recovery Action")
+
+        action_frame = ttk.Frame(self.content_frame)
+        action_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            action_frame,
+            text="Manual Recovery Action Required",
+            style='Title.TLabel'
+        ).pack(pady=(8, 4))
+
+        ttk.Label(
+            action_frame,
+            text=(
+                f"Device: {self.selected_device.model}\n"
+                f"Connection: {self.selected_device.connection_type.upper()}\n"
+                f"Serial: {self.selected_device.serial}"
+            ),
+            justify=tk.LEFT,
+            wraplength=max(420, self.root.winfo_width() - 80),
+        ).pack(anchor=tk.W, padx=12, pady=(0, 6))
+
+        result = self._get_manual_action_result()
+        steps_box = tk.Text(action_frame, wrap=tk.WORD, height=12, font=('Arial', 9))
+        steps_box.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        steps_box.insert(tk.END, result.get('message', 'Manual action is required on the device.'))
+        steps = result.get('details', {}).get('steps', [])
+        if steps:
+            steps_box.insert(tk.END, "\n\nSteps:\n")
+            for index, step in enumerate(steps, 1):
+                steps_box.insert(tk.END, f"{index}. {step}\n")
+        steps_box.insert(tk.END, "\nAfter completing the phone-side action, click Refresh Devices.")
+        steps_box.config(state=tk.DISABLED)
+
+        button_frame = ttk.Frame(action_frame)
+        button_frame.pack(fill=tk.X, padx=12, pady=6)
+        ttk.Button(
+            button_frame,
+            text="Refresh Devices",
+            command=self.show_device_selection,
+            style='Primary.TButton'
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            button_frame,
+            text="Back to Methods",
+            command=self.show_method_selection
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        self.back_button.config(state='normal')
+        self.next_button.config(state='disabled')
+
+    def _get_manual_action_result(self) -> Dict[str, Any]:
+        """Execute the selected guidance method once to retrieve its instructions."""
+        if not self.selected_methods:
+            return {'result': BypassResult.FAILED, 'message': 'No manual action was selected.', 'details': {}}
+
+        method = self.selected_methods[0]
+        return self.bypass_manager.execute_bypass(
+            self.selected_device,
+            method.name,
+            progress_callback=lambda status, percent: self.update_progress(
+                f"{method.name}: {status} ({percent}%)"
+            ),
+        )
     
     def start_bypass_execution(self):
         """Start the bypass execution process"""
+        if self._is_manual_action_plan():
+            self.show_manual_action_screen()
+            return
+
         # Log bypass attempt
         self.audit_logger.log_event(
             'bypass_attempt_start',
@@ -420,14 +540,6 @@ Proceed only if you understand the risks and legal implications.
                 'device_model': self.selected_device.model,
                 'methods': [method.name for method in self.selected_methods]
             }
-        )
-        
-        # Show info message
-        messagebox.showinfo(
-            "Bypass Execution",
-            f"Starting bypass execution with {len(self.selected_methods)} method(s).\n\n"
-            f"This is a demonstration. In a production environment, this would execute the selected bypass methods.\n\n"
-            f"Selected methods:\n" + "\n".join(f"• {m.name}" for m in self.selected_methods)
         )
         
         # Run execution in background thread to avoid freezing UI
@@ -453,16 +565,19 @@ Proceed only if you understand the risks and legal implications.
                     progress_callback
                 )
                 
-                # Convert dict to result object expected by reporting
-                from ..bypass.bypass_manager import BypassResult
-                is_success = result_dict.get('result') == BypassResult.SUCCESS
+                # Convert dict to result object expected by reporting.
+                result_code = result_dict.get('result')
+                is_success = result_code == BypassResult.SUCCESS
+                is_partial = result_code == BypassResult.PARTIAL
                 
                 result_obj = type('BypassExecutionResult', (object,), {
                     'method_name': method.name,
                     'success': is_success,
+                    'partial': is_partial,
                     'execution_time': result_dict.get('details', {}).get('execution_time', 0),
                     'message': result_dict.get('message', ''),
-                    'result_code': result_dict.get('result')
+                    'result_code': result_code,
+                    'details': result_dict.get('details', {}),
                 })()
                 results.append(result_obj)
                 
@@ -472,9 +587,11 @@ Proceed only if you understand the risks and legal implications.
                 result_obj = type('BypassExecutionResult', (object,), {
                     'method_name': method.name,
                     'success': False,
+                    'partial': False,
                     'execution_time': 0,
                     'message': str(e),
-                    'result_code': None
+                    'result_code': None,
+                    'details': {'error': str(e)},
                 })()
                 results.append(result_obj)
         
@@ -503,9 +620,8 @@ Proceed only if you understand the risks and legal implications.
     
     def show_results(self, results):
         """Show execution results"""
-        # For now, show a simple message box
-        # TODO: Implement proper results window
         success_count = sum(1 for result in results if result.success)
+        partial_count = sum(1 for result in results if getattr(result, 'partial', False))
         total_count = len(results)
         
         if success_count > 0:
@@ -513,12 +629,35 @@ Proceed only if you understand the risks and legal implications.
                 "Bypass Complete",
                 f"Bypass completed successfully!\n\n"
                 f"Successful methods: {success_count}/{total_count}\n"
-                f"Check the device to verify FP bypass."
+                f"Check the device to verify FRP recovery."
+            )
+        elif partial_count > 0:
+            lines = []
+            for result in results:
+                if not getattr(result, 'partial', False):
+                    continue
+                lines.append(f"{result.method_name}:")
+                if result.message:
+                    lines.append(result.message)
+                steps = getattr(result, 'details', {}).get('steps', [])
+                if steps:
+                    lines.append("")
+                    lines.extend(f"{index}. {step}" for index, step in enumerate(steps, 1))
+                lines.append("")
+
+            messagebox.showinfo(
+                "Manual Action Required",
+                "\n".join(lines).strip() or "Manual action is required on the device."
             )
         else:
+            failure_lines = [
+                f"{result.method_name}: {result.message or 'No details available'}"
+                for result in results
+            ]
             messagebox.showwarning(
                 "Bypass Failed",
                 f"All bypass methods failed.\n\n"
+                f"{chr(10).join(failure_lines)}\n\n"
                 f"Please try different methods or check device compatibility."
             )
     

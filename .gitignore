@@ -166,6 +166,7 @@ cython_debug/
 
 # VS Code
 .vscode/
+*.code-workspace
 
 # macOS
 .DS_Store
@@ -192,6 +193,9 @@ temp/
 
 # Tool specific
 .trae/
+.devin/
+git_askpass.sh
+package-lock.json
 
 # Logs directory
 logs/
