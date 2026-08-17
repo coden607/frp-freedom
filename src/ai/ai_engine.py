@@ -161,8 +161,9 @@ class AIEngine:
         connection_type = getattr(device, 'connection_type', '').lower()
         manufacturer = getattr(device, 'manufacturer', '').lower()
         brand = getattr(device, 'brand', manufacturer).lower()
+        model = getattr(device, 'model', '').lower()
         if connection_type == 'mtp' and any(
-            name in f'{manufacturer} {brand}'
+            name in f'{manufacturer} {brand} {model}'
             for name in ('tcl', 'alcatel', 'tracfone')
         ):
             return ['tcl_manual_recovery_reset']

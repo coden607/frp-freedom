@@ -20,6 +20,16 @@ def test_ai_recommends_manual_tcl_recovery_for_mtp():
     assert profile.recommended_methods == ["tcl_manual_recovery_reset"]
 
 
+def test_ai_uses_tcl_model_when_usb_metadata_has_unknown_brand():
+    device = tcl_mtp_device(manufacturer="Unknown")
+    device.brand = "Unknown"
+    device.model = "TCL 4187 USB Device"
+
+    profile = AIEngine(Config()).analyze_device(device)
+
+    assert profile.recommended_methods == ["tcl_manual_recovery_reset"]
+
+
 def test_tcl_mtp_has_one_selectable_recovery_method():
     methods = BypassManager(Config()).get_recommended_methods(tcl_mtp_device())
 

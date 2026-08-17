@@ -298,7 +298,14 @@ class BypassManager:
         # MTP confirms the phone is connected, but it does not provide shell or
         # UI control. Only show methods that are explicit manual guidance.
         if device.connection_type == 'mtp':
-            return method.name == 'tcl_manual_recovery_reset'
+            device_text = ' '.join(
+                str(getattr(device, field, '')).lower()
+                for field in ('manufacturer', 'brand', 'model', 'product', 'device')
+            )
+            return (
+                method.name == 'tcl_manual_recovery_reset'
+                and any(name in device_text for name in ('tcl', 'alcatel', 'tracfone'))
+            )
         
         # Check manufacturer (skip for unknown devices)
         if device.manufacturer != "Unknown" and not any(

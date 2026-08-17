@@ -197,16 +197,17 @@ class MethodSelectionFrame(ttk.Frame):
         """Load available methods for the selected device"""
         try:
             self.available_methods = self.bypass_manager.get_recommended_methods(self.device)
+            device_text = ' '.join(
+                str(getattr(self.device, field, '')).lower()
+                for field in ('manufacturer', 'brand', 'model', 'product', 'device')
+            )
             self.populate_method_tree()
             # MTP-only TCL devices have a single safe, manual recovery action.
             # Select it immediately so the user does not need a network/AI step
             # to proceed through the recovery wizard.
             if (
                 self.device.connection_type == 'mtp'
-                and any(
-                    name in self.device.manufacturer.lower()
-                    for name in ('tcl', 'alcatel', 'tracfone')
-                )
+                and any(name in device_text for name in ('tcl', 'alcatel', 'tracfone'))
                 and self.available_methods
             ):
                 self.selected_methods = [self.available_methods[0]]
@@ -317,6 +318,10 @@ RECOMMENDATIONS
         
         self.ai_text.insert('1.0', analysis_text)
         self.ai_text.configure(state='disabled')
+
+        # Analysis completion should also select its recommendations. This
+        # keeps the action button and the method table in the same state.
+        self.select_recommended(show_message=False)
         
         # Switch to AI tab
         self.notebook.select(1)
@@ -410,10 +415,16 @@ REQUIREMENTS
                 
                 self.update_selection_display()
     
-    def select_recommended(self):
+    def select_recommended(self, show_message=True):
         """Select AI recommended methods"""
         if not self.ai_analysis or 'device_profile' not in self.ai_analysis:
-            messagebox.showinfo("Info", "Please run AI analysis first to get recommendations.")
+            if self.available_methods:
+                self.selected_methods = self.available_methods[:1]
+                self._mark_selected_methods()
+                self.update_selection_display()
+                return
+            if show_message:
+                messagebox.showinfo("Info", "No compatible recovery action was detected for this device.")
             return
         
         recommended_names = self.ai_analysis['device_profile'].get('recommended_methods', [])
