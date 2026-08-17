@@ -154,12 +154,23 @@ class AIEngine:
     def _get_recommended_methods(self, device: DeviceInfo, vulnerability_score: float) -> List[str]:
         """Get AI-recommended bypass methods"""
         methods = []
+
+        # MTP exposes enough information to identify a phone, but it does not
+        # provide shell or UI control. For TCL-family devices, recommend the
+        # honest recovery-menu guidance that the app can actually perform.
+        connection_type = getattr(device, 'connection_type', '').lower()
+        manufacturer = getattr(device, 'manufacturer', '').lower()
+        brand = getattr(device, 'brand', manufacturer).lower()
+        if connection_type == 'mtp' and any(
+            name in f'{manufacturer} {brand}'
+            for name in ('tcl', 'alcatel', 'tracfone')
+        ):
+            return ['tcl_manual_recovery_reset']
         
         # Always include basic methods
         methods.extend(["adb_setup_wizard", "emergency_call_exploit"])
         
         # Brand-specific methods
-        brand = getattr(device, 'brand', device.manufacturer).lower()
         if brand == 'samsung':
             methods.extend(["samsung_setup_wizard_2025", "chrome_intent_exploit"])
         elif brand == 'lg':

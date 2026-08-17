@@ -198,6 +198,20 @@ class MethodSelectionFrame(ttk.Frame):
         try:
             self.available_methods = self.bypass_manager.get_recommended_methods(self.device)
             self.populate_method_tree()
+            # MTP-only TCL devices have a single safe, manual recovery action.
+            # Select it immediately so the user does not need a network/AI step
+            # to proceed through the recovery wizard.
+            if (
+                self.device.connection_type == 'mtp'
+                and any(
+                    name in self.device.manufacturer.lower()
+                    for name in ('tcl', 'alcatel', 'tracfone')
+                )
+                and self.available_methods
+            ):
+                self.selected_methods = [self.available_methods[0]]
+                self._mark_selected_methods()
+                self.update_selection_display()
             self.logger.info(f"Loaded {len(self.available_methods)} methods for device {self.device.serial}")
         except Exception as e:
             self.logger.error(f"Failed to load methods: {e}")
@@ -383,7 +397,7 @@ REQUIREMENTS
         selection = self.method_tree.selection()
         if selection:
             item = selection[0]
-            method_name = self.method_tree.item(item)['values'][0]
+            method_name = str(self.method_tree.item(item)['values'][0]).replace('✓ ', '')
             method = next((m for m in self.available_methods if m.name == method_name), None)
             
             if method:
@@ -405,13 +419,7 @@ REQUIREMENTS
         recommended_names = self.ai_analysis['device_profile'].get('recommended_methods', [])
         self.selected_methods = [m for m in self.available_methods if m.name in recommended_names[:3]]  # Top 3
         
-        # Update tree display
-        for item in self.method_tree.get_children():
-            method_name = self.method_tree.item(item)['values'][0].replace('✓ ', '')
-            if any(m.name == method_name for m in self.selected_methods):
-                self.method_tree.set(item, 'Method', f"✓ {method_name}")
-            else:
-                self.method_tree.set(item, 'Method', method_name)
+        self._mark_selected_methods()
         
         self.update_selection_display()
     
@@ -419,12 +427,20 @@ REQUIREMENTS
         """Clear all selected methods"""
         self.selected_methods = []
         
-        # Update tree display
-        for item in self.method_tree.get_children():
-            method_name = self.method_tree.item(item)['values'][0].replace('✓ ', '')
-            self.method_tree.set(item, 'Method', method_name)
+        self._mark_selected_methods()
         
         self.update_selection_display()
+
+    def _mark_selected_methods(self):
+        """Keep the method table labels in sync with the current selection."""
+        selected_names = {method.name for method in self.selected_methods}
+        for item in self.method_tree.get_children():
+            method_name = str(self.method_tree.item(item)['values'][0]).replace('✓ ', '')
+            self.method_tree.set(
+                item,
+                'Method',
+                f"✓ {method_name}" if method_name in selected_names else method_name,
+            )
     
     def update_selection_display(self):
         """Update the selection display"""
