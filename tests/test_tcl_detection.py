@@ -34,3 +34,13 @@ def test_tcl_mtp_has_one_selectable_recovery_method():
     methods = BypassManager(Config()).get_recommended_methods(tcl_mtp_device())
 
     assert [method.name for method in methods] == ["tcl_manual_recovery_reset"]
+
+
+def test_tcl_ai_analysis_matches_method_selection_payload():
+    analysis = BypassManager(Config()).get_ai_device_analysis(tcl_mtp_device())
+
+    assert analysis["device_profile"]["recommended_methods"] == [
+        "tcl_manual_recovery_reset"
+    ]
+    assert analysis["device_profile"]["frp_complexity"] in {"low", "medium", "high"}
+    assert "manual" in analysis["device_profile"]["recommended_methods"][0]

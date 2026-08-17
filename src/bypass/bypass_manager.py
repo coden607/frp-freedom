@@ -533,7 +533,16 @@ class BypassManager:
     def get_ai_device_analysis(self, device: DeviceInfo) -> Dict[str, Any]:
         """Get comprehensive AI analysis of the device"""
         device_profile = self.ai_engine.analyze_device(device)
-        
+        security_assessment = self._get_security_assessment_text(device_profile.vulnerability_score)
+        bypass_strategy = self._get_bypass_strategy(device_profile)
+        profile = {
+            'frp_complexity': device_profile.frp_complexity,
+            'complexity_score': device_profile.complexity_score,
+            'vulnerability_score': device_profile.vulnerability_score,
+            'recommended_methods': device_profile.recommended_methods,
+            'success_probabilities': device_profile.success_probability,
+        }
+
         return {
             'device_info': {
                 'brand': device.brand,
@@ -542,13 +551,15 @@ class BypassManager:
                 'security_patch': device.security_patch
             },
             'ai_analysis': {
-                'complexity_score': device_profile.complexity_score,
-                'vulnerability_score': device_profile.vulnerability_score,
-                'recommended_methods': device_profile.recommended_methods,
-                'success_probabilities': device_profile.success_probability,
-                'security_assessment': self._get_security_assessment_text(device_profile.vulnerability_score),
-                'bypass_strategy': self._get_bypass_strategy(device_profile)
-            }
+                **profile,
+                'security_assessment': security_assessment,
+                'bypass_strategy': bypass_strategy,
+            },
+            # Keep the shape consumed by the method-selection UI and older
+            # integrations while retaining the original ai_analysis payload.
+            'device_profile': profile,
+            'security_assessment': security_assessment,
+            'bypass_strategy': bypass_strategy,
         }
     
     def _get_security_assessment_text(self, vulnerability_score: float) -> str:
@@ -564,6 +575,11 @@ class BypassManager:
     
     def _get_bypass_strategy(self, profile: DeviceProfile) -> str:
         """Generate bypass strategy recommendation"""
+        if profile.recommended_methods == ['tcl_manual_recovery_reset']:
+            return (
+                "Use the TCL recovery menu to erase the device. "
+                "This removes local data but does not remove Google FRP."
+            )
         if profile.complexity_score < 0.3:
             return "Start with interface-based methods, then try ADB exploits"
         elif profile.complexity_score < 0.7:
