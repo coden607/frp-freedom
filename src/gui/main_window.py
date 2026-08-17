@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import threading
 import logging
+import webbrowser
 from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 
@@ -25,10 +26,13 @@ from .utils import ProgressDialog
 
 class FRPFreedomApp:
     """Main application class for FRP Freedom"""
+
+    GOOGLE_ACCOUNT_RECOVERY_URL = "https://accounts.google.com/signin/recovery"
     
     def __init__(self, config=None):
         self.root = tk.Tk()
         self.config = config or Config()
+        self.ui_scale = 1.25
         self.logger = logging.getLogger(__name__)
         self.audit_logger = AuditLogger(self.config)
         
@@ -74,7 +78,7 @@ class FRPFreedomApp:
         try:
             # The target machine reports ~1.39 scaling on a 1024x768 screen,
             # which makes the old fixed 1024x768 layout overflow badly.
-            self.root.tk.call('tk', 'scaling', 1.0)
+            self.root.tk.call('tk', 'scaling', self.ui_scale)
         except tk.TclError:
             pass
 
@@ -102,18 +106,18 @@ class FRPFreedomApp:
         """Configure ttk styles"""
         style = ttk.Style()
         
-        self.root.option_add('*Font', 'Arial 9')
-        style.configure('Primary.TButton', font=('Arial', 9, 'bold'))
-        style.configure('Secondary.TButton', font=('Arial', 9))
+        self.root.option_add('*Font', 'Arial 11')
+        style.configure('Primary.TButton', font=('Arial', 11, 'bold'))
+        style.configure('Secondary.TButton', font=('Arial', 11))
         
         # Configure frame styles
         style.configure('Card.TFrame', relief='raised', borderwidth=1)
         style.configure('Header.TFrame', background='#2c3e50')
         
         # Configure label styles
-        style.configure('Title.TLabel', font=('Arial', 12, 'bold'))
-        style.configure('Subtitle.TLabel', font=('Arial', 10))
-        style.configure('Header.TLabel', font=('Arial', 10, 'bold'), foreground='white')
+        style.configure('Title.TLabel', font=('Arial', 15, 'bold'))
+        style.configure('Subtitle.TLabel', font=('Arial', 12))
+        style.configure('Header.TLabel', font=('Arial', 12, 'bold'), foreground='white')
     
     def create_widgets(self):
         """Create main window widgets with the footer always visible."""
@@ -214,6 +218,12 @@ class FRPFreedomApp:
         tools_menu.add_command(label="Device Information", command=self.show_device_info)
         tools_menu.add_command(label="Refresh Devices", command=self.refresh_devices)
         tools_menu.add_command(label="Settings", command=self.show_settings)
+
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="View", menu=view_menu)
+        view_menu.add_command(label="Zoom In", command=lambda: self.set_ui_scale(self.ui_scale + 0.1))
+        view_menu.add_command(label="Zoom Out", command=lambda: self.set_ui_scale(self.ui_scale - 0.1))
+        view_menu.add_command(label="Reset Zoom", command=lambda: self.set_ui_scale(1.25))
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -222,6 +232,16 @@ class FRPFreedomApp:
         help_menu.add_command(label="Legal Disclaimer", command=self.show_legal_disclaimer)
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self.show_about)
+
+    def set_ui_scale(self, scale: float):
+        """Adjust Tk's global scale and keep it within a readable range."""
+        self.ui_scale = max(1.0, min(2.0, round(scale, 2)))
+        try:
+            self.root.tk.call('tk', 'scaling', self.ui_scale)
+            self.root.option_add('*Font', f'Arial {max(9, round(9 * self.ui_scale))}')
+            self.root.update_idletasks()
+        except tk.TclError as exc:
+            self.logger.warning(f"Unable to change UI scale: {exc}")
     
     def show_welcome_screen(self):
         """Display compact welcome screen with terms and conditions."""
@@ -507,6 +527,11 @@ Proceed only if you understand the risks and legal implications.
             button_frame,
             text="Back to Methods",
             command=self.show_method_selection
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(
+            button_frame,
+            text="Google Account Help",
+            command=lambda: webbrowser.open(self.GOOGLE_ACCOUNT_RECOVERY_URL),
         ).pack(side=tk.LEFT, padx=(8, 0))
 
         self.back_button.config(state='normal')

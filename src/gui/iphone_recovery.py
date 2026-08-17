@@ -20,7 +20,7 @@ class IPhoneRecoveryWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("iPhone Erase Assistant")
-        self.geometry("760x560")
+        self.geometry("920x700")
         self.transient(parent)
         self.manager = IPhoneRecoveryManager()
         self.devices: list[IPhoneDevice] = []
@@ -39,7 +39,7 @@ class IPhoneRecoveryWindow(tk.Toplevel):
         header.grid(row=0, column=0, sticky=(tk.W, tk.E))
         header.columnconfigure(0, weight=1)
 
-        ttk.Label(header, text="iPhone Erase Assistant", font=("Arial", 13, "bold")).grid(
+        ttk.Label(header, text="iPhone Erase Assistant", font=("Arial", 16, "bold")).grid(
             row=0, column=0, sticky=tk.W
         )
         ttk.Label(
@@ -60,9 +60,9 @@ class IPhoneRecoveryWindow(tk.Toplevel):
             f"usbmuxd: {tools.usbmuxd or 'not installed'}\n"
             f"lsusb: {tools.lsusb or 'not installed'}"
         )
-        ttk.Label(header, text=tool_text, font=("Courier", 9)).grid(row=2, column=0, sticky=tk.W, pady=(6, 0))
+        ttk.Label(header, text=tool_text, font=("Courier", 11)).grid(row=2, column=0, sticky=tk.W, pady=(6, 0))
         readiness = self.manager.linux_readiness_report().get("restore_ready", "unknown")
-        ttk.Label(header, text=f"Linux restore readiness: {readiness}", font=("Arial", 9, "bold")).grid(
+        ttk.Label(header, text=f"Linux restore readiness: {readiness}", font=("Arial", 11, "bold")).grid(
             row=3, column=0, sticky=tk.W, pady=(4, 0)
         )
 
@@ -109,7 +109,7 @@ class IPhoneRecoveryWindow(tk.Toplevel):
         output_frame.columnconfigure(0, weight=1)
         output_frame.rowconfigure(0, weight=1)
 
-        self.output = tk.Text(output_frame, wrap=tk.WORD, height=14, font=("Courier", 9))
+        self.output = tk.Text(output_frame, wrap=tk.WORD, height=14, font=("Courier", 11))
         self.output.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar = ttk.Scrollbar(output_frame, orient=tk.VERTICAL, command=self.output.yview)
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
@@ -157,7 +157,15 @@ class IPhoneRecoveryWindow(tk.Toplevel):
         if devices:
             self.write_status(f"Found {len(devices)} Apple device(s). Select a recovery or DFU mode device to restore.")
         else:
-            self.write_status("No Apple USB device found. Put the iPhone in recovery mode and connect it by USB.")
+            tools = self.manager.tool_status()
+            self.write_status(
+                "No Apple device detected.\n"
+                "Use a data-capable USB cable, connect the iPhone directly to Linux, "
+                "and put it in recovery or DFU mode. Then click Scan iPhone again.\n"
+                f"Detection tools: ideviceinfo={'installed' if tools.ideviceinfo else 'missing'}, "
+                f"lsusb={'installed' if tools.lsusb else 'missing'}, "
+                f"usbmuxd={'installed' if tools.usbmuxd else 'missing'}."
+            )
 
     def on_device_select(self, _event):
         selection = self.device_tree.selection()
