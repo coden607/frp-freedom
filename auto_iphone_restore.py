@@ -39,6 +39,16 @@ def parse_args() -> argparse.Namespace:
         default=2.0,
         help="Seconds between USB scans. Default: 2.",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Print Linux restore-tool readiness and exit.",
+    )
+    parser.add_argument(
+        "--iphone13-steps",
+        action="store_true",
+        help="Print iPhone 13 recovery-mode button steps and exit.",
+    )
     return parser.parse_args()
 
 
@@ -50,6 +60,20 @@ def main() -> int:
     args = parse_args()
     manager = IPhoneRecoveryManager()
     tools = manager.tool_status()
+
+    if args.check:
+        for name, value in manager.linux_readiness_report().items():
+            print(f"{name}: {value}")
+        return 0 if tools.can_restore else 127
+
+    if args.iphone13_steps:
+        print("iPhone 13 recovery mode button sequence:")
+        for index, step in enumerate(manager.iphone_13_recovery_steps(), 1):
+            print(f"{index}. {step}")
+        print()
+        for step in manager.apple_account_recovery_steps():
+            print(f"- {step}")
+        return 0
 
     if not tools.idevicerestore:
         print(

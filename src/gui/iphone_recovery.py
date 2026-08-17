@@ -56,9 +56,15 @@ class IPhoneRecoveryWindow(tk.Toplevel):
             f"idevicerestore: {tools.idevicerestore or 'not installed'}\n"
             f"ideviceinfo: {tools.ideviceinfo or 'not installed'}\n"
             f"ideviceenterrecovery: {tools.ideviceenterrecovery or 'not installed'}\n"
+            f"idevicepair: {tools.idevicepair or 'not installed'}\n"
+            f"usbmuxd: {tools.usbmuxd or 'not installed'}\n"
             f"lsusb: {tools.lsusb or 'not installed'}"
         )
         ttk.Label(header, text=tool_text, font=("Courier", 9)).grid(row=2, column=0, sticky=tk.W, pady=(6, 0))
+        readiness = self.manager.linux_readiness_report().get("restore_ready", "unknown")
+        ttk.Label(header, text=f"Linux restore readiness: {readiness}", font=("Arial", 9, "bold")).grid(
+            row=3, column=0, sticky=tk.W, pady=(4, 0)
+        )
 
         actions = ttk.Frame(self, padding=(12, 4))
         actions.grid(row=1, column=0, sticky=(tk.W, tk.E))
@@ -80,18 +86,21 @@ class IPhoneRecoveryWindow(tk.Toplevel):
         ttk.Button(actions, text="Apple Reset Instructions", command=self.open_apple_reset).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        ttk.Button(actions, text="Previous Passcode Help", command=self.open_passcode_reset).pack(
+        ttk.Button(actions, text="iPhone 13 Recovery Steps", command=self.show_iphone_13_steps).pack(
             side=tk.LEFT, padx=(8, 0)
         )
+        ttk.Button(actions, text="Account Help", command=self.show_account_help).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(actions, text="Previous Passcode Help", command=self.open_passcode_reset).pack(side=tk.LEFT, padx=(8, 0))
 
-        columns = ("Mode", "Product ID", "Description", "Serial")
+        columns = ("Mode", "Model", "Product ID", "Description", "Serial")
         self.device_tree = ttk.Treeview(self, columns=columns, show="headings", height=5)
         for column in columns:
             self.device_tree.heading(column, text=column)
         self.device_tree.column("Mode", width=100)
+        self.device_tree.column("Model", width=130)
         self.device_tree.column("Product ID", width=90)
-        self.device_tree.column("Description", width=260)
-        self.device_tree.column("Serial", width=250)
+        self.device_tree.column("Description", width=220)
+        self.device_tree.column("Serial", width=220)
         self.device_tree.grid(row=2, column=0, sticky=(tk.W, tk.E), padx=12, pady=(4, 8))
         self.device_tree.bind("<<TreeviewSelect>>", self.on_device_select)
 
@@ -109,7 +118,8 @@ class IPhoneRecoveryWindow(tk.Toplevel):
         self.write_status(
             "Before erasing, wait for the lockout timer if you still know the correct passcode.\n"
             "If you recently changed the passcode, try Apple's Previous Passcode option first.\n"
-            "To restore by computer, put the iPhone on the recovery screen, then scan here."
+            "For an iPhone 13 you forgot the passcode for, use iPhone 13 Recovery Steps, "
+            "put it on the recovery screen, then scan and erase here."
         )
 
     def scan_devices(self):
@@ -133,7 +143,13 @@ class IPhoneRecoveryWindow(tk.Toplevel):
                 "",
                 "end",
                 iid=str(index),
-                values=(device.mode, device.product_id, device.description, device.serial),
+                values=(
+                    device.mode,
+                    device.marketing_name,
+                    device.product_id,
+                    device.description,
+                    device.serial,
+                ),
             )
 
         self.scan_button.configure(state="normal")
@@ -151,11 +167,18 @@ class IPhoneRecoveryWindow(tk.Toplevel):
             return
 
         self.selected_device = self.devices[int(selection[0])]
-        can_restore_mode = self.selected_device.mode in {"recovery", "dfu", "apple_usb"}
+        can_restore_mode = self.manager.can_prepare_for_restore(self.selected_device)
         can_restore = self.manager.tool_status().can_restore and can_restore_mode
         self.restore_button.configure(state="normal" if can_restore else "disabled")
+        if self.selected_device.is_iphone_13_family:
+            self.write_status(f"Selected {self.selected_device.marketing_name}. This app can erase it through recovery restore.")
         if not can_restore_mode:
-            self.write_status("Selected device is in normal mode. Put it in recovery mode before erase/restore.")
+            self.write_status("Selected device is not ready. Put it in recovery/DFU mode before erase/restore.")
+        elif self.selected_device.mode == "normal":
+            self.write_status(
+                "Selected device is in normal mode. The app will request recovery mode if the phone is trusted; "
+                "otherwise use the manual recovery steps."
+            )
 
     def confirm_restore(self):
         if not self.selected_device or self.restore_running:
@@ -173,12 +196,14 @@ class IPhoneRecoveryWindow(tk.Toplevel):
         self.restore_running = True
         self.restore_button.configure(state="disabled")
         self.scan_button.configure(state="disabled")
+        if self.selected_device.mode == "normal":
+            self.write_status("Preparing selected iPhone for recovery restore...")
         command = " ".join(self.manager.build_restore_command(self.selected_device))
-        self.write_status(f"Starting restore command:\n{command}")
+        self.write_status(f"Restore command after recovery/DFU detection:\n{command}")
 
         def worker():
             try:
-                code = self.manager.restore_latest_firmware(self.selected_device, self.write_status_threadsafe)
+                code = self.manager.erase_device(self.selected_device, self.write_status_threadsafe)
                 self.after(0, lambda: self.restore_finished(code))
             except Exception as exc:
                 self.after(0, lambda err=exc: self.restore_failed(str(err)))
@@ -261,3 +286,15 @@ class IPhoneRecoveryWindow(tk.Toplevel):
 
     def open_passcode_reset(self):
         webbrowser.open(self.APPLE_PASSCODE_RESET_URL)
+
+    def show_iphone_13_steps(self):
+        lines = ["iPhone 13 recovery mode button sequence:", ""]
+        lines.extend(f"{index}. {step}" for index, step in enumerate(self.manager.iphone_13_recovery_steps(), 1))
+        self.write_status("\n".join(lines))
+        messagebox.showinfo("iPhone 13 Recovery Steps", "\n".join(lines))
+
+    def show_account_help(self):
+        lines = ["Apple Account / Activation Lock help:", ""]
+        lines.extend(f"- {step}" for step in self.manager.apple_account_recovery_steps())
+        self.write_status("\n".join(lines))
+        messagebox.showinfo("Account Help", "\n".join(lines))

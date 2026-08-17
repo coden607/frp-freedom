@@ -19,6 +19,28 @@ from typing import Callable, Dict, List, Optional
 
 APPLE_VENDOR_ID = "05ac"
 
+IPHONE_13_MODELS = {
+    "iPhone14,2": "iPhone 13 Pro",
+    "iPhone14,3": "iPhone 13 Pro Max",
+    "iPhone14,4": "iPhone 13 mini",
+    "iPhone14,5": "iPhone 13",
+}
+
+IPHONE_13_RECOVERY_STEPS = [
+    "Connect the iPhone 13 to this Linux computer with a data-capable USB cable.",
+    "Quickly press and release Volume Up.",
+    "Quickly press and release Volume Down.",
+    "Hold the Side button. Keep holding past the Apple logo.",
+    "Release the Side button only when the recovery screen shows a cable/computer icon.",
+    "Return to this app and use Scan iPhone, then Erase and Restore Latest iOS.",
+]
+
+APPLE_ACCOUNT_RECOVERY_STEPS = [
+    "Erasing removes the local passcode, but it does not bypass Activation Lock.",
+    "If setup asks for the linked Apple Account, use Apple's account recovery or reset the password.",
+    "If you bought the phone and cannot contact the previous owner, request Activation Lock support from Apple with proof of purchase.",
+]
+
 
 @dataclass
 class IPhoneDevice:
@@ -27,6 +49,17 @@ class IPhoneDevice:
     product_id: str
     description: str
     ecid: Optional[str] = None
+    model_identifier: Optional[str] = None
+
+    @property
+    def marketing_name(self) -> str:
+        if self.model_identifier in IPHONE_13_MODELS:
+            return IPHONE_13_MODELS[self.model_identifier]
+        return self.model_identifier or self.description
+
+    @property
+    def is_iphone_13_family(self) -> bool:
+        return self.model_identifier in IPHONE_13_MODELS
 
 
 @dataclass
@@ -34,6 +67,8 @@ class RestoreToolStatus:
     idevicerestore: Optional[str]
     ideviceinfo: Optional[str]
     ideviceenterrecovery: Optional[str]
+    idevicepair: Optional[str]
+    usbmuxd: Optional[str]
     lsusb: Optional[str]
 
     @property
@@ -64,8 +99,29 @@ class IPhoneRecoveryManager:
             idevicerestore=shutil.which("idevicerestore"),
             ideviceinfo=shutil.which("ideviceinfo"),
             ideviceenterrecovery=shutil.which("ideviceenterrecovery"),
+            idevicepair=shutil.which("idevicepair"),
+            usbmuxd=shutil.which("usbmuxd"),
             lsusb=shutil.which("lsusb"),
         )
+
+    def linux_readiness_report(self) -> Dict[str, str]:
+        """Return installed-tool status for Linux restore support."""
+        status = self.tool_status()
+        report = {
+            "idevicerestore": status.idevicerestore or "missing",
+            "ideviceinfo": status.ideviceinfo or "missing",
+            "ideviceenterrecovery": status.ideviceenterrecovery or "missing",
+            "idevicepair": status.idevicepair or "missing",
+            "usbmuxd": status.usbmuxd or "missing",
+            "lsusb": status.lsusb or "missing",
+        }
+        if not status.idevicerestore:
+            report["restore_ready"] = "no: install idevicerestore"
+        elif not status.lsusb:
+            report["restore_ready"] = "partial: install usbutils for recovery/DFU detection"
+        else:
+            report["restore_ready"] = "yes"
+        return report
 
     def scan_devices(self) -> List[IPhoneDevice]:
         devices = self._scan_lsusb()
@@ -94,6 +150,16 @@ class IPhoneRecoveryManager:
     def is_restore_mode(self, device: IPhoneDevice) -> bool:
         """Return True when a device is in a mode idevicerestore can erase."""
         return device.mode in {"recovery", "dfu", "apple_usb"}
+
+    def can_prepare_for_restore(self, device: IPhoneDevice) -> bool:
+        """Return True when the app can restore now or try to enter recovery first."""
+        status = self.tool_status()
+        return self.is_restore_mode(device) or (
+            device.mode == "normal"
+            and bool(status.ideviceenterrecovery)
+            and bool(device.serial)
+            and not device.serial.startswith("usb_")
+        )
 
     def find_restore_ready_device(self) -> Optional[IPhoneDevice]:
         """Return the first connected iPhone/iPad that is ready for restore."""
@@ -182,6 +248,34 @@ class IPhoneRecoveryManager:
                 output_callback("Waiting for iPhone in recovery or DFU mode...")
             time.sleep(max(0.5, poll_interval))
 
+    def prepare_device_for_restore(
+        self,
+        device: IPhoneDevice,
+        timeout_seconds: float = 120.0,
+        poll_interval: float = 2.0,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> Optional[IPhoneDevice]:
+        """Put a selected device into a restore-ready state when possible."""
+        if self.is_restore_mode(device):
+            return device
+
+        if device.mode != "normal":
+            if output_callback:
+                output_callback(f"Device mode {device.mode} is not restore-ready.")
+            return None
+
+        requested = self.enter_recovery_mode(device, output_callback)
+        if requested and output_callback:
+            output_callback("Recovery requested. Waiting for the recovery screen and USB reconnect...")
+        elif output_callback:
+            output_callback("Use the manual recovery button sequence, then keep the phone connected.")
+
+        return self.wait_for_restore_ready_device(
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            output_callback=output_callback,
+        )
+
     def auto_restore_when_connected(
         self,
         timeout_seconds: Optional[float] = None,
@@ -219,6 +313,27 @@ class IPhoneRecoveryManager:
             if output_callback:
                 output_callback(line.rstrip())
         return process.wait()
+
+    def erase_device(
+        self,
+        device: IPhoneDevice,
+        output_callback: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        """Erase a selected iPhone through the standard recovery restore flow."""
+        restore_device = self.prepare_device_for_restore(device, output_callback=output_callback)
+        if not restore_device:
+            return 2
+        if output_callback:
+            output_callback("Starting full erase and latest signed iOS restore.")
+        return self.restore_latest_firmware(restore_device, output_callback)
+
+    @staticmethod
+    def iphone_13_recovery_steps() -> List[str]:
+        return list(IPHONE_13_RECOVERY_STEPS)
+
+    @staticmethod
+    def apple_account_recovery_steps() -> List[str]:
+        return list(APPLE_ACCOUNT_RECOVERY_STEPS)
 
     def _scan_lsusb(self) -> List[IPhoneDevice]:
         status = self.tool_status()
@@ -282,11 +397,13 @@ class IPhoneRecoveryManager:
         model = info.get("ProductType") or "iPhone/iPad"
         udid = info.get("UniqueDeviceID") or "apple_normal_mode"
         name = info.get("DeviceName") or model
+        marketing_name = IPHONE_13_MODELS.get(model, model)
         return IPhoneDevice(
             serial=udid,
             mode="normal",
             product_id="unknown",
-            description=f"{name} ({model})",
+            description=f"{name} ({marketing_name})",
+            model_identifier=model,
         )
 
     @staticmethod
