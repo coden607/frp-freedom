@@ -430,3 +430,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 **Remember**: Use this tool responsibly and only with proper legal authorization. Respect local laws and regulations regarding device security and privacy.
+
+---
+
+## Factory Verification (wave2, 2026-10-08)
+
+- Test suite: `pytest tests/` — **11 passed** (TCL detection, iPhone recovery parsing, main-window device info) on Python 3.12.
+- This is a **desktop/CLI application** (tkinter GUI + USB/ADB tooling). It is not a web app and cannot be served by GitHub Pages — it runs locally on Windows/macOS/Linux with Python 3.9+ and ADB/fastboot binaries.
